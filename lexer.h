@@ -10,10 +10,18 @@ typedef enum {
   TOK_BODY,
   TOK_TYPE,
   TOK_ARROW,
+  TOK_FORALL,
+  TOK_ASTERISK,
   TOK_LPARENTH,
   TOK_RPARENTH,
+  TOK_LBRACKET,
+  TOK_RBRACKET,
   TOK_END_OF_INPUT,
 } TokenType;
+
+ // (∏Σα.λx:α.x)β
+ // (\\a:*.\\x:a.x)b
+ // (forall a . \\x:a.x)b
 
 typedef struct {
   TokenType type;

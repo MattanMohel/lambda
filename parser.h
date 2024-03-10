@@ -9,18 +9,21 @@ typedef struct Assoc Assoc;
 typedef struct Type Type;
 typedef struct Expr Expr;
 
+// (∀a.λx:a.x) [int] 10
 
 typedef enum {
   TYP_TERM,
   TYP_COMP,
+  TYP_POLY,
 } TypeType;
 
 typedef struct Type {
   TypeType vrt;
   int det;
   union {
-    char term [BUF_LEN];
+    char term[BUF_LEN];
     struct { Type* lhs; Type* rhs; } comp;
+    struct { Type* lhs; Type* rhs; } poly;
   };
 
   int row;
@@ -28,18 +31,22 @@ typedef struct Type {
 } Type;
 
 typedef enum {
-  EXP_ABST,
   EXP_TERM,
+  EXP_ABST,
   EXP_APPL,
+  EXP_ABST_TYPE,
+  EXP_APPL_TYPE,
 } ExprType;
 
 typedef struct Expr {
   ExprType vrt;
   Type* type;
   union {
-    char term [BUF_LEN];
+    char term[BUF_LEN];
     struct { Expr* lhs; Expr* rhs; } abst;
     struct { Expr* lhs; Expr* rhs; } appl;
+    struct { Type* lhs; Expr* rhs; } abst_type;
+    struct { Expr* lhs; Type* rhs; } appl_type;
   };
 
   int row;

@@ -49,6 +49,7 @@ int expr_eq (Expr* lhs, Expr* rhs) {
     case EXP_TERM: return strcmp(lhs->term, rhs->term) == 0;
     case EXP_ABST: return expr_eq(lhs->abst.lhs, rhs->abst.lhs) && expr_eq(lhs->abst.rhs, rhs->abst.rhs);
     case EXP_APPL: return expr_eq(lhs->appl.lhs, rhs->appl.lhs) && expr_eq(lhs->appl.rhs, rhs->appl.rhs);
+    case EXP_ABST_TYPE: return type_eq(lhs->abst_type.lhs, rhs->abst_type.lhs) && expr_eq(lhs->abst_type.rhs, rhs->abst_type.rhs);
   }
 }
 
@@ -82,6 +83,14 @@ void ctx_subst (Context* ctx, Type* type, Type* subst) {
   for (int i = 0; i < VEC_LEN(ctx->pairs); i++) {
     type_subst(ctx->pairs[i].type, &cpy, subst);
   }
+}
+
+Type* ctx_find (Context* ctx, Expr* expr) {
+  for (int i = 0; i < VEC_LEN(ctx->pairs); i++) {
+    if (expr_eq(ctx->pairs[i].expr, expr)) return ctx->pairs[i].type;
+  }
+
+  return NULL;
 }
 
 //  unification:
@@ -157,6 +166,14 @@ Type* arrow (Type* lhs, Type* rhs) {
   return type;
 }
 
+Type* poly (Type* lhs, Type* rhs) {
+  Type* type = malloc(sizeof(Type));
+  type->vrt = TYP_POLY;
+  type->poly.lhs = lhs;
+  type->poly.rhs = rhs;
+  return type;
+}
+
 int type_check (Context *ctx, Expr *expr) {
   switch (expr->vrt) {
     case EXP_TERM: {
@@ -185,7 +202,45 @@ int type_check (Context *ctx, Expr *expr) {
         type_check(ctx, expr->appl.lhs)               && 
         type_check(ctx, expr->appl.rhs);
     }
+    case EXP_ABST_TYPE: {
+      Type* t1 = expr->abst_type.lhs;
+      Type* t2 = new_type(ctx);
+
+      return 
+        push_type(ctx, expr, poly(t1, t2))      && 
+        push_type(ctx, expr->abst_type.rhs, t2) &&
+        type_check(ctx, expr->abst_type.rhs);
+    }
+    case EXP_APPL_TYPE: {      
+      if (!type_check(ctx, expr->appl_type.lhs)) return 0;
+
+      Type* t2 = ctx_find(ctx, expr->appl_type.lhs);
+      Type* t1 = new_type(ctx); *t1 = *t2->poly.rhs;
+      type_subst(t1, t2->poly.lhs, expr->appl_type.rhs);
+
+      return push_type(ctx, expr, t1);
+    }
   }
 }
 
-
+// \\a x:a.x
+// \\a : forall a . t1
+// \\x : t1 = t2 -> t3
+// \\x : t2 = a
+// x : t3 = a
+//
+// \\a x:a.x : forall a . a->a
+//
+// (\\a x:a.x) [b]
+// (\\a x:a.x) [b] : t1
+// (\\a x:a.x) : t2 -> forall a . t1
+// [b]: t2 = b
+//
+// \\x : t1 = t3 -> t4
+// x : t3 = a
+// x : t4 = a
+//
+// t2 = b
+// t1 = a -> a
+//
+// t1 = (forall a . a -> a)[a:=b] = b -> b

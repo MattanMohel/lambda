@@ -89,6 +89,7 @@ Assoc expr_assoc (TokenType type) {
     case TOK_APPL: return new_assoc(LASSOC, 50);
     case TOK_ABST: return new_assoc(LASSOC, 30);
     case TOK_TYPE: return new_assoc(LASSOC, 60);
+    case TOK_FORALL: return new_assoc(LASSOC, 70);
     default: return new_assoc(RASSOC, -1);
   }
 }
@@ -135,14 +136,53 @@ int parse_abst (Parser* parser, Expr* res) {
   return 1;
 }
 
+int parse_poly (Parser* parser, Expr* res) { 
+  Type bind;
+  if (!parse_type(parser, new_assoc(RASSOC, 0), &bind)) return 0;
+  if (bind.vrt != TYP_TERM) {
+    push_err(parser, "binding non-term as type parameter");
+    return 0;
+  }
+
+  // TODO: move allocation to post-failure point
+  res->vrt = EXP_ABST_TYPE;
+  res->abst_type.lhs = type_alloc(&bind);
+
+  Expr body = new_expr();
+  switch (at(parser)->type) {
+    case TOK_BODY: {
+      eat(parser);      
+      if (!parse_expr(parser, expr_assoc(TOK_ABST), &body)) return 0;
+      break;
+    }
+    default: {
+      if (!parse_poly(parser, &body)) return 0;
+      break;
+    }
+  }
+
+  res->abst_type.rhs = expr_alloc(&body);
+  return 1;
+}
+
 int parse_appl (Parser* parser, Assoc assoc, Expr* lhs, Expr* res) {
+  if (expect(parser, TOK_LBRACKET)) {
+    eat(parser);
+    Type rhs;
+    if (!parse_type(parser, new_assoc(RASSOC, 0), &rhs)) return 0;
+
+    res->vrt = EXP_APPL_TYPE;
+    res->appl_type.lhs = lhs;
+    res->appl_type.rhs = type_alloc(&rhs);
+    return try_eat(parser, TOK_RBRACKET);
+  } 
+
   Expr rhs = new_expr(); 
   if (!parse_expr(parser, assoc, &rhs)) return 0;
 
   res->vrt = EXP_APPL;
   res->appl.lhs = lhs;
   res->appl.rhs = expr_alloc(&rhs);
-
   return 1;
 }
 
@@ -204,10 +244,7 @@ int parse_expr_infix (Parser* parser, Assoc assoc, Expr* lhs, Expr* res) {
       }
     }
     case TOK_TYPE: {
-      if (lhs->vrt != EXP_TERM) {
-        push_err(parser, "trying to type a non-term expression");
-        return 0;
-      }
+      if (lhs->vrt != EXP_TERM) return push_err(parser, "trying to type a non-term expression");
 
       Type* type = malloc(sizeof(Type));
       type->det = 1;
@@ -222,10 +259,8 @@ int parse_expr_infix (Parser* parser, Assoc assoc, Expr* lhs, Expr* res) {
         return 1;
       }
     }
-    default: {
-      push_err(parser, "expected infix, found '%s'", tok(op));
-      return 0;
-    }
+
+    default: return push_err(parser, "expected infix, found '%s'", tok(op));
   }
 }
 
@@ -234,10 +269,8 @@ int parse_expr_prefix (Parser* parser, Expr* res) {
   
   switch (op) {
     case TOK_ABST: return parse_abst(parser, res);
-    default: {
-      push_err(parser, "expected prefix, found '%s'", tok(op));
-      return 0;
-    }
+    case TOK_FORALL: return parse_poly(parser, res);
+    default: return push_err(parser, "expected prefix, found '%s'", tok(op));
   }
 }
 
@@ -343,6 +376,12 @@ void print_type (Type* type) {
       print_type(type->comp.rhs);
       printf(")");
       break;
+    case TYP_POLY:
+      printf("forall ");
+      print_type(type->poly.lhs);
+      printf(". ");
+      print_type(type->poly.rhs);
+      break;
   }
 }
 
@@ -362,10 +401,25 @@ void print_expr (Expr* expr) {
       print_expr(expr->abst.rhs);
       printf(")");
       break;
+    case EXP_ABST_TYPE:
+      printf("(∀");
+      print_type(expr->abst_type.lhs);
+      printf(": ");
+      print_expr(expr->abst_type.rhs);
+      printf(")");
+      break;
+    case EXP_APPL_TYPE:
+      printf("(");
+      print_expr(expr->appl_type.lhs);
+      printf(" [");
+      print_type(expr->appl_type.rhs);
+      printf("])");
+      break;
     case EXP_TERM:      
       if (expr->type != NULL) {
-        printf("%s:", expr->term);
+        printf("[%s:", expr->term);
         print_type(expr->type);
+        printf("]");
       } else {
         printf("%s", expr->term);
       }

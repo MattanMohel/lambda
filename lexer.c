@@ -52,7 +52,7 @@ void take_space (Lexer* state) {
 }
 
 int take_op (Lexer* state) {
-  if (take(state, "\\", TOK_ABST)) {
+  if (take(state, "\\", TOK_ABST) || take(state, "@", TOK_FORALL)) {
     state->bind_site = 1;
     return 1;
   } if (take(state, ".", TOK_BODY)) {
@@ -61,10 +61,13 @@ int take_op (Lexer* state) {
   }
 
   return 
-    take(state, ":",  TOK_TYPE) || 
-    take(state, "->", TOK_ARROW) || 
+    take(state, ":", TOK_TYPE)     || 
+    take(state, "->", TOK_ARROW)   ||
+    take(state, "*", TOK_ASTERISK) ||
     take(state, "(", TOK_LPARENTH) ||
-    take(state, ")", TOK_RPARENTH);
+    take(state, ")", TOK_RPARENTH) ||
+    take(state, "[", TOK_LBRACKET) ||
+    take(state, "]", TOK_RBRACKET);
 }
 
 int take_ident (Lexer* state) {
@@ -88,15 +91,14 @@ int take_ident (Lexer* state) {
 // if `ident || ')'` && `(` || ')' && `ident || '('`
 int take_infix (Lexer* state) {
   take_space(state);
-  if (!take_ident(state) && !take(state, ")", TOK_RPARENTH)) {
-    return 0;
-  }
+
+  if (!take_ident(state) && !take(state, ")", TOK_RPARENTH) && !take(state, "]", TOK_RBRACKET)) return 0;
 
   while (1) {
     Token token = new_token(state, TOK_APPL, "");
     VEC_PUSH(state->tokens, token);
     take_space(state);
-    if (take(state, "(", TOK_LPARENTH)) {
+    if (take(state, "(", TOK_LPARENTH) || take(state, "[", TOK_LBRACKET)) {
       return 1;
     } else if (!take_ident(state)) {
       VEC_POP(state->tokens);
@@ -148,8 +150,11 @@ const char* tok (TokenType type) {
     case TOK_BODY: return ".";
     case TOK_TYPE: return ":";
     case TOK_ARROW: return "->";
+    case TOK_FORALL: return "forall";
     case TOK_LPARENTH: return "(";
     case TOK_RPARENTH: return ")";
+    case TOK_LBRACKET: return "[";
+    case TOK_RBRACKET: return "]";
     case TOK_END_OF_INPUT: return "end of input";
     default: return "[no token]";
   }

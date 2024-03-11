@@ -28,9 +28,7 @@ void hmap_delete_entry (Entry*e) {
   Entry* next = e->next;
   free(e);
 
-  if (next) {
-    hmap_delete_entry(next);
-  }
+  if (next) hmap_delete_entry(next);
 }
   
 Entry* hmap_entry_new (char* key, void* value) {
@@ -41,12 +39,16 @@ Entry* hmap_entry_new (char* key, void* value) {
   return e;
 }
 
-void*hmap_add (Hashmap* hmap, char* key, void* value) {
-  Entry* e = hmap_entry_new(key, value);
-  size_t hash = (hmap->hash)(e->key) % hmap->cap;   
+void* hmap_add (Hashmap* hmap, char* key, void* value) {
+  char* cpy = malloc(strlen(key));
+  strcpy(cpy, key);
+
+  Entry* e = hmap_entry_new(cpy, value);
+  size_t hash = (hmap->hash)(cpy) % hmap->cap;   
   Entry* head = hmap->entries[hash];
   Entry* prev = NULL;
 
+  hmap->len++;
   
   if (!head) {
     hmap->entries[hash] = e;
@@ -54,7 +56,7 @@ void*hmap_add (Hashmap* hmap, char* key, void* value) {
   } 
 
   while (1) {  
-    if (strcmp(e->key, head->key) == 0) {
+    if (strcmp(cpy, head->key) == 0) {
       if (!prev) {
          e->next = head->next;
          hmap->entries[hash] = e;
@@ -70,9 +72,7 @@ void*hmap_add (Hashmap* hmap, char* key, void* value) {
       return value;
     }
 
-    if (!head->next) {
-      break;
-    }
+    if (!head->next) break;
 
     prev = head;
     head = head->next; 
@@ -87,18 +87,16 @@ void* hmap_rem (Hashmap* hmap, char* key) {
   Entry* head = hmap->entries[hash];
   Entry* prev = NULL;
 
+  hmap->len--;
+
   if (!head) {
     return NULL;
   }
 
   while (1) {
     if (strcmp(key, head->key) == 0) {
-      if (!prev) {
-        hmap->entries[hash] = head->next;
-      }
-      else {
-        prev->next = head->next;
-      }
+      if (!prev) hmap->entries[hash] = head->next;
+      else prev->next = head->next;
       
       void* value = head->value;
       free(head->key);
@@ -106,9 +104,7 @@ void* hmap_rem (Hashmap* hmap, char* key) {
       return value;
     }
 
-    if (!head->next) {
-      return NULL;
-    }
+    if (!head->next) return NULL;
 
     prev = head;
     head = head->next;
@@ -119,15 +115,11 @@ void* hmap_get (Hashmap* hmap, char* key) {
   size_t hash = (hmap->hash)(key) % hmap->cap;
   Entry* head = hmap->entries[hash];
 
-  while(1) {
-    if (strcmp(key, head->key) == 0) {
-      return head->value;
-    }
-    
-    if (!head->next) {
-      break;
-    }
+  if (!head) return NULL;
 
+  while(1) {
+    if (strcmp(key, head->key) == 0) return head->value;    
+    if (!head->next) break;
     head = head->next;
   }
 
@@ -138,15 +130,11 @@ int hmap_find (Hashmap* hmap, char* key) {
   size_t hash = (hmap->hash)(key) % hmap->cap;
   Entry* head = hmap->entries[hash];
 
-  while(1) {
-    if (strcmp(key, head->key) == 0) {
-      return 1;
-    }
-    
-    if (!head->next) {
-      break;
-    }
+  if (!head) return 0;
 
+  while(1) {
+    if (strcmp(key, head->key) == 0) return 1;  
+    if (!head->next) break;
     head = head->next;
   }
 

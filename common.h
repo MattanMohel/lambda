@@ -8,6 +8,10 @@
 #include <stdio.h>
 #include <string.h>
 
+
+typedef struct Empty Empty;
+
+#define EMPTY Empty*
 #define BUF_LEN 256
 
 #endif

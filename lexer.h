@@ -4,24 +4,18 @@
 #include "common.h"
 
 typedef enum {
-  TOK_TERM,
-  TOK_ABST,
-  TOK_APPL,
-  TOK_BODY,
-  TOK_TYPE,
-  TOK_ARROW,
+  TOK_IDENT,
+  TOK_APP,
+  TOK_LAM,
   TOK_FORALL,
+  TOK_PERIOD,
+  TOK_COLON,
+  TOK_ARROW,
   TOK_ASTERISK,
   TOK_LPARENTH,
   TOK_RPARENTH,
-  TOK_LBRACKET,
-  TOK_RBRACKET,
   TOK_END_OF_INPUT,
 } TokenType;
-
- // (∏Σα.λx:α.x)β
- // (\\a:*.\\x:a.x)b
- // (forall a . \\x:a.x)b
 
 typedef struct {
   TokenType type;
@@ -38,8 +32,6 @@ typedef struct {
 } Span;
 
 VEC(Token) tokenize (const char* stream);
-int is_prefix (TokenType type);
-int is_infix  (TokenType type);
 
 const char* tok (TokenType type);
 

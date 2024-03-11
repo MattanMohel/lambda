@@ -1,9 +1,12 @@
 #include "parser.h"
 #include "strop.h"
+#include "hashmap.h"
 #include <stdarg.h>
 
 typedef struct Parser {
   VEC(Token) stream;
+  int binding;
+  Hashmap* binds;
   Token* ptr; 
   char mes [BUF_LEN];
 } Parser;
@@ -60,7 +63,7 @@ Assoc new_assoc (AssocType typ, int bp) {
 
 Expr new_expr () {
   Expr expr;
-  expr.type = NULL;
+  expr.annot.typ = ANN_EMPTY;
   return expr;
 }
 
@@ -84,119 +87,114 @@ Type* type_alloc (Type* type) {
   return alloc;
 }
 
+int is_infix (TokenType typ) {
+  return 
+    typ == TOK_COLON || 
+    typ == TOK_APP || 
+    typ == TOK_ARROW;
+}
+
+int is_prefix (TokenType typ) {
+  return 
+    typ == TOK_FORALL || 
+    typ == TOK_LAM;
+}
+
+int is_expr_term (ExprType typ) {
+  return 
+    typ == EXP_TERM || 
+    typ == EXP_FREE;
+}
+
+int is_expr_sort (ExprType typ) {
+  return 
+    typ == EXP_TERM || 
+    typ == EXP_FREE || 
+    typ == EXP_KIND ||
+    typ == EXP_TYPE || 
+    typ == EXP_PI;
+}
+
+int is_expr_func (ExprType typ) {
+  return 
+    typ == EXP_LAM || 
+    typ == EXP_PI;
+}
+
+char* expr_ident (Expr* expr) {
+  switch (expr->typ) {
+    case EXP_FREE: return expr->free;
+    case EXP_TERM: return expr->term.name;
+    default: return "";
+  }
+}
+
+void push_bind (Parser* parser, Expr* expr) {
+  int* index = malloc(sizeof(int));
+  *index = parser->binds->len;
+  hmap_add(parser->binds, expr_ident(expr), index);
+}
+
+void rem_bind (Parser* parser, Expr* expr) {
+  hmap_rem(parser->binds, expr_ident(expr));
+}
+
 Assoc expr_assoc (TokenType type) {
   switch (type) {
-    case TOK_APPL: return new_assoc(LASSOC, 50);
-    case TOK_ABST: return new_assoc(LASSOC, 30);
-    case TOK_TYPE: return new_assoc(LASSOC, 60);
-    case TOK_FORALL: return new_assoc(LASSOC, 70);
+    case TOK_APP:  return new_assoc(LASSOC, 50);
+    case TOK_ARROW:  return new_assoc(RASSOC, 70);
+    case TOK_LAM: return new_assoc(LASSOC, 30);
+    case TOK_COLON:  return new_assoc(LASSOC, 60);
+    case TOK_FORALL: return new_assoc(LASSOC, 30);
     default: return new_assoc(RASSOC, -1);
   }
 }
 
 int parse (VEC(Token) tokens, Expr* res) {
-  Parser state;
-  memset(state.mes, '\0', BUF_LEN);
-  state.stream = tokens;
-  state.ptr = tokens;
+  Parser parser;
+  memset(parser.mes, '\0', BUF_LEN);
+  parser.stream = tokens;
+  parser.ptr = tokens;
+  parser.binding = 0;
+  parser.binds = hmap_new();
 
-  int pass = parse_expr(&state, new_assoc(RASSOC, 0), res);
+  int pass = parse_expr(&parser, new_assoc(RASSOC, 0), res);
 
   if (!pass) {
-    printf("%s at (%d, %d)\n", state.mes, state.ptr->col, state.ptr->row);
+    printf("%s at (%d, %d)\n", parser.mes, parser.ptr->col, parser.ptr->row);
   }
+
+  //hmap_delete(parser.binds);
   return pass;
-}
-
-int parse_abst (Parser* parser, Expr* res) { 
-  Expr bind = new_expr();
-  if (!parse_expr(parser, new_assoc(RASSOC, 0), &bind)) return 0;
-  if (bind.vrt != EXP_TERM) {
-    push_err(parser, "binding non-term as lambda parameter");
-    return 0;
-  }
-
-  res->vrt = EXP_ABST;
-  res->abst.lhs = expr_alloc(&bind);
-
-  Expr body = new_expr();
-  switch (at(parser)->type) {
-    case TOK_BODY: {
-      eat(parser);      
-      if (!parse_expr(parser, expr_assoc(TOK_ABST), &body)) return 0;
-      break;
-    }
-    default: {
-      if (!parse_abst(parser, &body)) return 0;
-      break;
-    }
-  }
-
-  res->abst.rhs = expr_alloc(&body);
-  return 1;
-}
-
-int parse_poly (Parser* parser, Expr* res) { 
-  Type bind;
-  if (!parse_type(parser, new_assoc(RASSOC, 0), &bind)) return 0;
-  if (bind.vrt != TYP_TERM) {
-    push_err(parser, "binding non-term as type parameter");
-    return 0;
-  }
-
-  // TODO: move allocation to post-failure point
-  res->vrt = EXP_ABST_TYPE;
-  res->abst_type.lhs = type_alloc(&bind);
-
-  Expr body = new_expr();
-  switch (at(parser)->type) {
-    case TOK_BODY: {
-      eat(parser);      
-      if (!parse_expr(parser, expr_assoc(TOK_ABST), &body)) return 0;
-      break;
-    }
-    default: {
-      if (!parse_poly(parser, &body)) return 0;
-      break;
-    }
-  }
-
-  res->abst_type.rhs = expr_alloc(&body);
-  return 1;
-}
-
-int parse_appl (Parser* parser, Assoc assoc, Expr* lhs, Expr* res) {
-  if (expect(parser, TOK_LBRACKET)) {
-    eat(parser);
-    Type rhs;
-    if (!parse_type(parser, new_assoc(RASSOC, 0), &rhs)) return 0;
-
-    res->vrt = EXP_APPL_TYPE;
-    res->appl_type.lhs = lhs;
-    res->appl_type.rhs = type_alloc(&rhs);
-    return try_eat(parser, TOK_RBRACKET);
-  } 
-
-  Expr rhs = new_expr(); 
-  if (!parse_expr(parser, assoc, &rhs)) return 0;
-
-  res->vrt = EXP_APPL;
-  res->appl.lhs = lhs;
-  res->appl.rhs = expr_alloc(&rhs);
-  return 1;
 }
 
 int parse_expr (Parser* parser, Assoc assoc, Expr* res) {
   Expr lhs = new_expr(); 
 
   switch (at(parser)->type) {
-    case TOK_TERM: {
-      Token* cur = eat(parser);
-      lhs.vrt = EXP_TERM;
+    case TOK_IDENT: {
+      Token* cur = eat(parser);  
+      int* idx = hmap_get(parser->binds, cur->tok);
+
+      if (idx == NULL) {
+        lhs.typ = EXP_FREE;
+        strcpy(lhs.free, cur->tok);
+      } else {
+        lhs.typ = EXP_TERM;
+        lhs.term.idx = *idx;
+        strcpy(lhs.term.name, cur->tok);
+      }
+
       lhs.col = cur->col;
       lhs.row = cur->row;
-      lhs.type = NULL;
-      strcpy(lhs.term, cur->tok);
+      break;
+    }
+    case TOK_ASTERISK: {
+      Token* cur = eat(parser);
+      lhs.kind.form = FORM_TERM;
+      lhs.typ = EXP_KIND;
+      lhs.col = cur->col;
+      lhs.row = cur->row;
       break;
     }
     case TOK_LPARENTH: {
@@ -215,25 +213,45 @@ int parse_expr (Parser* parser, Assoc assoc, Expr* res) {
   if (!parse_expr_infix(parser, assoc, alloc, res)) {
     free(alloc);
     return 0;
-  }
-
+  } 
   return 1;
 }
 
 int parse_expr_infix (Parser* parser, Assoc assoc, Expr* lhs, Expr* res) {
   TokenType op = at(parser)->type; 
+  
+  // if lhs is adjacent to 'ident' or '(' then apply
+  if (!parser->binding && (op == TOK_IDENT || op == TOK_LPARENTH)) {
+    op = TOK_APP;
+  } 
+
   if (!is_infix(op) || expr_assoc(op).bp < assoc_bp(assoc)) {
     memcpy(res, lhs, sizeof(Expr));
     free(lhs);
     return 1;
   }
 
-  eat(parser);
+  if (op != TOK_APP) eat(parser);
   
-  switch (op) {
-    case TOK_APPL: {
+  switch (op) {    
+    case TOK_COLON: 
+      if (!parse_annot(parser, expr_assoc(op), lhs)) return 0;
+      return parse_expr_infix(parser, assoc, lhs, res);
+    
+    case TOK_ARROW: {
+      Expr infix = new_expr();
+      if (!parse_arrow(parser, expr_assoc(op), lhs, &infix)) return 0;
+      Expr* alloc = expr_alloc(&infix);
+      if (!parse_expr_infix(parser, assoc, alloc, res)) {
+        free(alloc);
+        return 0;
+      } 
+      return 1;
+    }
+    
+    case TOK_APP: {
       Expr infix = new_expr(); 
-      if (!parse_appl(parser, expr_assoc(op), lhs, &infix)) return 0;
+      if (!parse_app(parser, expr_assoc(op), lhs, &infix)) return 0;
       
       Expr* alloc = expr_alloc(&infix);
       if (!parse_expr_infix(parser, assoc, alloc, res)) {
@@ -243,187 +261,176 @@ int parse_expr_infix (Parser* parser, Assoc assoc, Expr* lhs, Expr* res) {
         return 1;
       }
     }
-    case TOK_TYPE: {
-      if (lhs->vrt != EXP_TERM) return push_err(parser, "trying to type a non-term expression");
-
-      Type* type = malloc(sizeof(Type));
-      type->det = 1;
-      // TODO: add fail condition here!
-      parse_type(parser, new_assoc(RASSOC, 0), type);
-      lhs->type = type;
-
-      if (!parse_expr_infix(parser, assoc, lhs, res)) {
-        free(type);
-        return 0;
-      } else {
-        return 1;
-      }
-    }
-
-    default: return push_err(parser, "expected infix, found '%s'", tok(op));
+    default: 
+      return push_err(parser, "expected infix, found '%s'", tok(op));
   }
 }
 
 int parse_expr_prefix (Parser* parser, Expr* res) {
-  TokenType op = eat(parser)->type;
-  
+  TokenType op = eat(parser)->type; 
   switch (op) {
-    case TOK_ABST: return parse_abst(parser, res);
-    case TOK_FORALL: return parse_poly(parser, res);
+    case TOK_LAM: return parse_lam(parser, expr_assoc(TOK_LAM), res);
+    case TOK_FORALL: return parse_pi(parser, expr_assoc(TOK_FORALL), res);
     default: return push_err(parser, "expected prefix, found '%s'", tok(op));
   }
 }
 
-int parse_arrow (Parser* parser, Assoc assoc, Type* lhs, Type* res) {
-  Type* rhs = malloc(sizeof(Expr)); 
-  if (!parse_type(parser, assoc, rhs)) {
-    free(rhs);
-    return 0;
-  }
+int parse_app (Parser* parser, Assoc assoc, Expr* lhs, Expr* res) {
+  Expr rhs = new_expr(); 
+  if (!parse_expr(parser, assoc, &rhs)) return 0;
 
-  res->vrt = TYP_COMP;
-  res->comp.lhs = lhs;
-  res->comp.rhs = rhs;
-  res->det = 0;
-
+  res->typ = EXP_APP;
+  res->app.lhs = lhs;
+  res->app.rhs = expr_alloc(&rhs);
   return 1;
 }
 
-int parse_type (Parser* parser, Assoc assoc, Type* res) {
-  Type lhs; 
+int parse_arrow (Parser* parser, Assoc assoc, Expr* lhs, Expr* res) {  
+  if (!is_expr_sort(lhs->typ)) return push_err(parser, "cannot form arrow of non-sort lhs term");  
+  Expr rhs = new_expr(); 
+  if (!parse_expr(parser, assoc, &rhs)) return 0;
+  if (!is_expr_sort(rhs.typ)) return push_err(parser, "cannot from arrow of non-sort rhs term");
 
-  switch (at(parser)->type) {
-    case TOK_TERM: {
-      Token* cur = eat(parser);
-      lhs.vrt = TYP_TERM;
-      lhs.col = cur->col;
-      lhs.row = cur->row;
-      lhs.det = 1;
-      strcpy(lhs.term, cur->tok);
-      break;
-    }
-    case TOK_LPARENTH: {
-      eat(parser);
-      if (!parse_type(parser, new_assoc(RASSOC, 0), &lhs)) return 0;
-      if (!try_eat(parser, TOK_RPARENTH)) return 0;
-      break;
-    }
-    default: {
-      if (!parse_type_prefix(parser, res)) return 0;
-      break;
-    }
-  }
+  // NOTE: they can still be of different sorts!
 
-  Type* alloc = type_alloc(&lhs);
-  if (!parse_type_infix(parser, assoc, alloc, res)) {
-    free(alloc);
-    return 0;
-  }
-
+  res->typ = EXP_TYPE;
+  res->type.form = FORM_ARROW; 
+  res->type.arrow.lhs = lhs;
+  res->type.arrow.rhs = expr_alloc(&rhs);
   return 1;
 }
 
-int parse_type_infix (Parser* parser, Assoc assoc, Type* lhs, Type* res) { 
-  TokenType op = at(parser)->type; 
-  if (op != TOK_ARROW || type_assoc(op).bp < assoc_bp(assoc)) {
-    memcpy(res, lhs, sizeof(Expr));
-    return 1;
-  }
+int parse_annot (Parser* parser, Assoc assoc, Expr* lhs) {
+  if (!is_expr_term(lhs->typ)) return push_err(parser, "expected term on lhs of annotation");
 
-  eat(parser);
+  Expr rhs = new_expr();
+  if (!parse_expr(parser, assoc, &rhs)) return 0;
+  if (!is_expr_sort(rhs.typ)) return push_err(parser, "expected sort on rhs on annotation");
   
-  switch (op) {
-    case TOK_ARROW: { 
-      Type infix; 
-      if (!parse_arrow(parser, expr_assoc(op), lhs, &infix)) return 0;
-      
-      Type* alloc = type_alloc(&infix);
-      if (!parse_type_infix(parser, assoc, alloc, res)) {
-        free(alloc);
-        return 0;
-      } else {
-        return 1;
-      }
-    }
-    default: {
-      push_err(parser, "expected type infix, found '%s'", tok(op));
-      return 0;
-    }
-  }
+  lhs->annot.typ = ANN_TYPED;
+  lhs->annot.type = expr_alloc(&rhs);
+ 
+  return 1;
 }
 
-int parse_type_prefix (Parser* parser, Type* res) {
-  return 0;
+int parse_lam (Parser* parser, Assoc assoc, Expr* res) { 
+  parser->binding = 1;
+  Expr bind = new_expr();
+  if (!parse_expr(parser, new_assoc(RASSOC, 0), &bind)) return 0;
+  if (!is_expr_term(bind.typ)) return push_err(parser, "binding non-term as lambda parameter");
+  if (bind.annot.typ == ANN_EMPTY) return push_err(parser, "binding expects annotation");
+
+  push_bind(parser, &bind);
+
+  Expr body = new_expr();
+  if (try_eat(parser, TOK_PERIOD)) {
+    parser->binding = 0;
+    if (!parse_expr(parser, assoc, &body)) return 0;
+  } else {
+    if (!parse_lam(parser, assoc, &body)) return 0;
+  }
+
+  rem_bind(parser, &bind);
+  
+  res->typ = EXP_LAM;
+  res->lam.lhs = expr_alloc(&bind);
+  res->lam.rhs = expr_alloc(&body);
+  return 1;
 }
 
-Assoc type_assoc (TokenType typ) {
-  switch (typ) {
-    case TOK_TYPE:  return new_assoc(LASSOC, 10);
-    case TOK_ARROW: return new_assoc(RASSOC, 20);
-    default: return new_assoc(RASSOC, -1);
+int parse_pi (Parser* parser, Assoc assoc, Expr* res) { 
+  parser->binding = 1;
+  Expr bind = new_expr();
+  if (!parse_expr(parser, new_assoc(RASSOC, 0), &bind)) return 0;
+  if (!is_expr_term(bind.typ)) return push_err(parser, "binding non-term as lambda parameter");
+
+  push_bind(parser, &bind);
+
+  Expr body = new_expr();
+  if (try_eat(parser, TOK_PERIOD)) {
+    parser->binding = 0;
+    if (!parse_expr(parser, assoc, &body)) return 0;
+  } else {
+    if (!parse_pi(parser, assoc, &body)) return 0;
   }
+
+  rem_bind(parser, &bind);
+  
+  res->typ = EXP_PI;
+  res->lam.lhs = expr_alloc(&bind);
+  res->lam.rhs = expr_alloc(&body);
+  return 1;
 }
 
 void print_type (Type* type) {
-  switch (type->vrt) {
-    case TYP_TERM:
+  switch (type->form) {
+    case FORM_TERM:
       printf("%s", type->term);
       break;
-    case TYP_COMP:
+    case FORM_ARROW:
       printf("(");
-      print_type(type->comp.lhs);
+      print_expr(type->arrow.lhs);
       printf("->");
-      print_type(type->comp.rhs);
+      print_expr(type->arrow.rhs);
       printf(")");
       break;
-    case TYP_POLY:
-      printf("forall ");
-      print_type(type->poly.lhs);
-      printf(". ");
-      print_type(type->poly.rhs);
+  }
+}
+
+void print_kind (Kind* kind) {
+  switch (kind->form) {
+    case FORM_TERM:
+      printf("*");
+      break;
+    case FORM_ARROW:
+      printf("(");
+      print_kind(kind->arrow.lhs);
+      printf("->");
+      print_kind(kind->arrow.rhs);
+      printf(")");
       break;
   }
 }
 
 void print_expr (Expr* expr) {
-  switch (expr->vrt) {
-    case EXP_APPL:
+  switch (expr->typ) {
+    case EXP_APP:
       printf("(");
-      print_expr(expr->appl.lhs);
+      print_expr(expr->app.lhs);
       printf(" ");
-      print_expr(expr->appl.rhs);
+      print_expr(expr->app.rhs);
       printf(")");
       break;
-    case EXP_ABST:
+    case EXP_LAM:
       printf("(λ");
-      print_expr(expr->abst.lhs);
+      print_expr(expr->lam.lhs);
       printf(".");
-      print_expr(expr->abst.rhs);
+      print_expr(expr->lam.rhs);
       printf(")");
       break;
-    case EXP_ABST_TYPE:
+    case EXP_PI:
       printf("(∀");
-      print_type(expr->abst_type.lhs);
-      printf(": ");
-      print_expr(expr->abst_type.rhs);
+      print_expr(expr->pi.lhs);
+      printf(". ");
+      print_expr(expr->pi.rhs);
       printf(")");
       break;
-    case EXP_APPL_TYPE:
-      printf("(");
-      print_expr(expr->appl_type.lhs);
-      printf(" [");
-      print_type(expr->appl_type.rhs);
-      printf("])");
+    case EXP_TYPE:
+      print_type(&expr->type);
       break;
-    case EXP_TERM:      
-      if (expr->type != NULL) {
-        printf("[%s:", expr->term);
-        print_type(expr->type);
-        printf("]");
-      } else {
-        printf("%s", expr->term);
-      }
+    case EXP_KIND:
+      print_kind(&expr->kind);
       break;
+    case EXP_TERM: 
+      printf("#%d", expr->term.idx);
+      break;
+    case EXP_FREE:
+      printf("%s", expr->free);
+      break;
+  }  
+  if (expr->annot.typ == ANN_TYPED) {
+    printf(": ");
+    print_expr(expr->annot.type);
   }
 }
 

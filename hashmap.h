@@ -19,6 +19,7 @@ typedef struct Entry {
 typedef struct {
   hash_fn hash;
   Entry** entries;
+  size_t len;
   size_t cap;
 } Hashmap;
 

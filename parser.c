@@ -115,10 +115,12 @@ int is_expr_sort (ExprType typ) {
     typ == EXP_PI;
 }
 
-int is_expr_func (ExprType typ) {
+int is_tok_beg (TokenType typ) {
   return 
-    typ == EXP_LAM || 
-    typ == EXP_PI;
+    typ == TOK_LPARENTH || 
+    typ == TOK_IDENT || 
+    typ == TOK_LAM || 
+    typ == TOK_FORALL;
 }
 
 char* expr_ident (Expr* expr) {
@@ -225,7 +227,7 @@ int parse_expr_infix (Parser* parser, Assoc assoc, Expr* lhs, Expr* res) {
   TokenType op = at(parser)->type; 
   
   // if lhs is adjacent to 'ident' or '(' then apply
-  if (!parser->binding && (op == TOK_IDENT || op == TOK_LPARENTH)) {
+  if (!parser->binding && is_tok_beg(op)) {
     op = TOK_APP;
   } 
 
@@ -410,8 +412,8 @@ void print_expr (Expr* expr) {
       printf("*");
       break;
     case EXP_TERM: 
-      //printf("%s", expr->term.name);
-      printf("#%d", expr->term.idx);
+      printf("%s", expr->term.name);
+      //printf("#%d", expr->term.idx);
       break;
     case EXP_FREE:
       printf("%s", expr->free);

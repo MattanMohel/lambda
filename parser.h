@@ -71,7 +71,7 @@ int is_infix (TokenType typ);
 int is_prefix (TokenType typ);
 
 int is_expr_sort (ExprType typ);
-int is_expr_func (ExprType typ);
+int is_tok_beg (TokenType typ);
 
 int parse_app   (Parser* parser, Assoc assoc, Expr* lhs, Expr* res);
 int parse_arrow (Parser* parser, Assoc assoc, Expr* lhs, Expr* res);

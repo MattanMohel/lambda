@@ -4,276 +4,173 @@
 #include "parser.h"
 #include "strop.h"
 
+Expr term (const char* str) {
+  VEC(Token) toks = tokenize(str);
+  Expr res;
+  parse(toks, &res);
+  VEC_FREE(toks);
+  return res;
+}
+
 int expr_eq (Expr *lhs, Expr *rhs) {
   if (lhs->typ != rhs->typ) return 0;
 
   switch (lhs->typ) {
+    case EXP_KIND: return 1;
     case EXP_TERM: return lhs->term.idx == rhs->term.idx;
     case EXP_FREE: return strcmp(lhs->free, rhs->free) == 0;
     case EXP_APP: return expr_eq(lhs->app.lhs, rhs->app.lhs) && expr_eq(lhs->app.rhs, rhs->app.rhs);
-    case EXP_LAM: return expr_eq(lhs->lam.lhs->annot.type, rhs->lam.lhs->annot.type) && expr_eq(lhs->lam.rhs, rhs->lam.rhs); 
-    case EXP_PI: return expr_eq(lhs->pi.lhs->annot.type, rhs->pi.lhs->annot.type) && expr_eq(rhs->pi.rhs, rhs->pi.rhs);
-    case EXP_TYPE: return type_eq(&lhs->type, &rhs->type);
-    case EXP_KIND: return kind_eq(&lhs->kind, &rhs->kind);
+    case EXP_LAM: return expr_eq(lhs->lam.lhs->annot.ann, rhs->lam.lhs->annot.ann) && expr_eq(lhs->lam.rhs, rhs->lam.rhs); 
+    case EXP_PI: {
+      if (lhs->pi.dep != rhs->pi.dep) return 0;
+      if (!lhs->pi.dep) return expr_eq(lhs->pi.lhs, rhs->pi.lhs) && expr_eq(rhs->pi.rhs, rhs->pi.rhs);
+      return expr_eq(lhs->pi.lhs->annot.ann, rhs->pi.lhs->annot.ann) && expr_eq(rhs->pi.rhs, rhs->pi.rhs);
+    }
   }
 }
 
-int type_eq (Type* lhs, Type* rhs) {
-  if (lhs->form != rhs->form) return 0;
+typedef struct Pair {
+  Expr* expr;
+  Expr* type;
+} Pair;
 
-  switch (lhs->form) {
-    case FORM_TERM: return 1;//strcmp(lhs->term, rhs->term);
-    case FORM_ARROW: return expr_eq(lhs->arrow.lhs, rhs->arrow.lhs) && expr_eq(lhs->arrow.rhs, rhs->arrow.rhs);
+typedef struct Context {
+  VEC(Pair) pairs; 
+} Context;
+
+Expr* ctx_push (Context* ctx, Expr* expr, Expr* type) {
+  Pair pair;
+  pair.expr = expr;
+  pair.type = type;
+
+  VEC_PUSH(ctx->pairs, pair); 
+  return type;
+}
+
+void ctx_rem (Context* ctx, Expr* expr) {
+  for (int i = VEC_LEN(ctx->pairs)-1; i >= 0; i++) {
+    if (expr_eq(ctx->pairs[i].expr, expr)) {
+      VEC_REM(ctx->pairs, i);
+    }
   }
 }
 
-int kind_eq (Kind* lhs, Kind* rhs) {
-  if (lhs->form != rhs->form) return 0;
+Expr* ctx_get (Context* ctx, Expr* expr) {
+  if (expr->typ == EXP_KIND) return expr;
+  for (int i = VEC_LEN(ctx->pairs)-1; i >= 0; i--) {
+    if (expr_eq(ctx->pairs[i].expr, expr)) {
+      return ctx->pairs[i].type;
+    }
+  }
+  return NULL;
+}
 
-  switch (lhs->form) {
-    case FORM_TERM: return 1;
-    case FORM_ARROW: return kind_eq(lhs->arrow.lhs, rhs->arrow.lhs) && kind_eq(lhs->arrow.rhs, rhs->arrow.rhs);
+Expr* pi_new (Expr* lhs, Expr* rhs) {
+  Expr* pi = malloc(sizeof(Expr));
+  pi->typ = EXP_PI;
+  pi->pi.lhs = lhs;
+  pi->pi.rhs = rhs;
+  pi->pi.dep = is_subterm(rhs, lhs);
+  return pi;
+}
+
+Expr* subst (Expr* expr, Expr* term, Expr* sub) {
+  switch (expr->typ) {
+    case EXP_KIND: return expr;
+    case EXP_TERM:
+    case EXP_FREE: {
+        if (expr->annot.typ == ANN_TYPED) expr->annot.ann = subst(expr->annot.ann, term, sub);
+        if (expr_eq(expr, term)) return sub; 
+        else return expr;
+    }
+    case EXP_APP: {
+      Expr* lhs = subst(expr->app.lhs, term, sub);
+      Expr* rhs = subst(expr->app.rhs, term, sub);
+      Expr* app = malloc(sizeof(Expr));
+      app->typ = EXP_APP;
+      app->app.lhs = lhs;
+      app->app.rhs = rhs;
+      return app;
+    }
+    case EXP_LAM: {
+      Expr* lam = malloc(sizeof(Expr));
+      lam->typ = EXP_LAM;
+      lam->lam.lhs = subst(expr->pi.lhs, term, sub);
+      lam->lam.rhs = subst(expr->pi.rhs, term, sub);
+      return lam;
+    }
+    case EXP_PI: {   
+      Expr* lhs = subst(expr->pi.lhs, term, sub);
+      Expr* rhs = subst(expr->pi.rhs, term, sub);
+      Expr* pi = pi_new(lhs, rhs);
+      return pi;
+    }
+  }
+}
+
+int is_subterm (Expr* expr, Expr* term) {
+  if (expr->annot.typ == ANN_TYPED && is_subterm(expr->annot.ann, term)) return 1;
+  switch (expr->typ) {
+    case EXP_KIND: return 0;
+    case EXP_TERM: 
+    case EXP_FREE: return expr_eq(expr, term);
+    case EXP_APP: return is_subterm(expr->app.lhs, term) || is_subterm(expr->app.rhs, term);
+    case EXP_LAM: return is_subterm(expr->lam.lhs, term) || is_subterm(expr->lam.rhs, term);
+    case EXP_PI: return is_subterm(expr->pi.lhs, term) || is_subterm(expr->pi.rhs, term);
+  }
+}
+
+Expr* check (Expr* expr) {
+  Context ctx;
+  ctx.pairs = VEC_NEW(Pair, 2);
+  return type_check(&ctx, expr);
+}
+
+void print_ctx (Context* ctx) {
+  if (VEC_LEN(ctx->pairs) == 0) return;
+  printf("---len: %d---\n", VEC_LEN(ctx->pairs));
+  for (int i = 0; i < VEC_LEN(ctx->pairs); i++) {
+    print_expr(ctx->pairs[i].expr);
+    printf(": ");
+    print_expr(ctx->pairs[i].type);
+    printf("\n");
+  }
+  printf("------------\n");
+}
+
+Expr* type_check (Context *ctx, Expr *expr) {
+  switch (expr->typ) {
+    case EXP_KIND: 
+    case EXP_FREE: 
+    case EXP_TERM: return ctx_get(ctx, expr);
+    case EXP_LAM: {
+      Expr* annot = type_check(ctx, expr->lam.lhs->annot.ann);
+      if (annot == NULL) return NULL;
+      ctx_push(ctx, expr->lam.lhs, expr->lam.lhs->annot.ann);
+      Expr* body = type_check(ctx, expr->lam.rhs);
+      //ctx_rem(ctx, expr->lam.lhs);
+      if (body == NULL) return NULL;
+      return ctx_push(ctx, expr, pi_new(expr->lam.lhs, body)); 
+    }
+    case EXP_PI: {
+      Expr* annot = type_check(ctx, expr->lam.lhs->annot.ann);
+      if (!ctx_get(ctx, annot)) return NULL;
+      ctx_push(ctx, expr->pi.lhs, expr->lam.lhs->annot.ann);
+      Expr* body = type_check(ctx, expr->lam.rhs);
+      if (body == NULL) return NULL;
+      //ctx_rem(ctx, expr->pi.lhs);
+      return ctx_push(ctx, expr, body);
+    }
+    case EXP_APP: {
+      Expr* type = type_check(ctx, expr->app.lhs);
+      if (type == NULL || type->typ != EXP_PI) return NULL;
+      Expr* rhs = type_check(ctx, expr->app.rhs);
+      if (!expr_eq(type->pi.lhs->annot.ann, rhs)) return NULL;
+
+      Expr* sub = subst(type->pi.rhs, type->pi.lhs, expr->app.rhs);
+      return ctx_push(ctx, expr, sub);
+    }
   }
 }
 
 
-/*typedef struct Pair {*/
-  /*Expr* expr;*/
-  /*Type* type;*/
-/*} Pair;*/
-
-/*typedef struct Context {*/
-  /*int index;*/
-  /*VEC(Pair) pairs; */
-/*} Context;*/
-
-/*Expr term (const char* tex) {*/
-  /*VEC(Token) toks = tokenize(tex);*/
-  /*Expr res;*/
-  /*parse(toks, &res);*/
-  /*return res;*/
-/*}*/
-
-/*int validate (Expr* expr) {*/
-  /*Context ctx;*/
-  /*ctx.index = 0;*/
-  /*ctx.pairs = VEC_NEW(Pair, 2);*/
-
-  /*int pass = type_check(&ctx, expr);*/
-
-  /*for (int i = 0; i < VEC_LEN(ctx.pairs); i++) {*/
-    /*print_expr(ctx.pairs[i].expr);*/
-    /*printf(": ");*/
-    /*print_type(ctx.pairs[i].type);*/
-    /*printf("\n");*/
-  /*}*/
-
-  /*return pass;*/
-/*}*/
-
-/*void check () {*/
-  /*Expr a = term("\\x: a->(a->a)->b y:a->a z:a. x (y z) y");*/
-  /*printf("passed: %d\n", validate(&a));  */
-/*}*/
-
-/*int expr_eq (Expr* lhs, Expr* rhs) {*/
-  /*if (rhs->vrt != lhs->vrt) return 0;*/
-  /*switch (lhs->vrt) {*/
-    /*case EXP_TERM: return strcmp(lhs->term, rhs->term) == 0;*/
-    /*case EXP_ABST: return expr_eq(lhs->abst.lhs, rhs->abst.lhs) && expr_eq(lhs->abst.rhs, rhs->abst.rhs);*/
-    /*case EXP_APPL: return expr_eq(lhs->appl.lhs, rhs->appl.lhs) && expr_eq(lhs->appl.rhs, rhs->appl.rhs);*/
-    /*case EXP_ABST_TYPE: return type_eq(lhs->abst_type.lhs, rhs->abst_type.lhs) && expr_eq(lhs->abst_type.rhs, rhs->abst_type.rhs);*/
-  /*}*/
-/*}*/
-
-/*int type_eq (Type* lhs, Type* rhs) {*/
-  /*if (lhs->vrt != rhs->vrt) return 0;*/
-  /*switch (lhs->vrt) {*/
-    /*case TYP_TERM: return strcmp(lhs->term, rhs->term) == 0;*/
-    /*case TYP_COMP: return type_eq(lhs->comp.lhs, rhs->comp.lhs) && type_eq(lhs->comp.rhs, rhs->comp.rhs);*/
-  /*}*/
-/*}*/
-
-/*int is_subtype (Type* type, Type* sub) {*/
-  /*if (type_eq(type, sub)) return 1;*/
-  /*switch (type->vrt) {*/
-    /*case TYP_COMP: return is_subtype(type->comp.lhs, sub) || is_subtype(type->comp.rhs, sub);*/
-    /*case TYP_TERM: return 0;*/
-  /*}*/
-/*}*/
-
-/*void type_subst (Type* term, Type* type, Type* subst) {*/
-  /*if (type_eq(term, type)) *term = *subst;*/
-  /*else if (term->vrt == TYP_COMP) {*/
-    /*type_subst(term->comp.lhs, type, subst);*/
-    /*type_subst(term->comp.rhs, type, subst);*/
-  /*}*/
-/*}*/
-
-/*void ctx_subst (Context* ctx, Type* type, Type* subst) {*/
-  /*Type cpy = *type;*/
-  /*type_subst(type, &cpy, subst);*/
-  /*for (int i = 0; i < VEC_LEN(ctx->pairs); i++) {*/
-    /*type_subst(ctx->pairs[i].type, &cpy, subst);*/
-  /*}*/
-/*}*/
-
-/*Type* ctx_find (Context* ctx, Expr* expr) {*/
-  /*for (int i = 0; i < VEC_LEN(ctx->pairs); i++) {*/
-    /*if (expr_eq(ctx->pairs[i].expr, expr)) return ctx->pairs[i].type;*/
-  /*}*/
-
-  /*return NULL;*/
-/*}*/
-/*
-  unification:
-  ------------------------------------------------------
- | T0 = T1               | T0 <=> T1                    |
- | T0 = T1->T2->...->Tn  | T0 <= T1->T2->...->Tn        |
- | T0->T1 = T2->T3       | unify(T0, T2), unify(T1, T3) |
- | Ta = T0               | Ta <=> T0, T0 is determinate |
-  ------------------------------------------------------
- 
- errors:
-  ----------------------------------------
- | Ta = T0->T1                            |
- | T0 = T1, T0 != T1, T0 is subterm of T1 |
-  ----------------------------------------
-
-  NOTE: 'Ta' represents an explicit determinate type
-*/
-/*int unify (Context* ctx, Type* lhs, Type* rhs) {*/
-  /*printf("unify ");*/
-  /*print_type(lhs);*/
-  /*printf(" ");*/
-  /*print_type(rhs);*/
-  /*printf("\n");*/
-
-  /*if (type_eq(lhs, rhs)) return 1;*/
-  /*if (lhs->vrt != rhs->vrt) {*/
-    /*if (lhs->det || rhs->det || is_subtype(lhs, rhs) || is_subtype(rhs, lhs)) return 0;*/
-    /*if (lhs->vrt == TYP_COMP) ctx_subst(ctx, rhs, lhs);*/
-    /*else ctx_subst(ctx, lhs, rhs);*/
-    /*return 1;*/
-  /*}*/
-
-  /*switch (lhs->vrt) {*/
-    /*case TYP_COMP: */
-      /*return */
-        /*unify(ctx, lhs->comp.lhs, rhs->comp.lhs) && */
-        /*unify(ctx, lhs->comp.rhs, rhs->comp.rhs);*/
-
-    /*case TYP_TERM: {*/
-      /*if (lhs->det && rhs->det) return 0;*/
-      /*if (lhs->det) ctx_subst(ctx, rhs, lhs); */
-      /*else ctx_subst(ctx, lhs, rhs);          */
-      /*return 1;*/
-    /*}*/
-  /*}*/
-/*}*/
-
-/*int push_type(Context *ctx, Expr *expr, Type *type) {*/
-  /*for (int i = 0; i < VEC_LEN(ctx->pairs); i++) {*/
-    /*if (expr_eq(ctx->pairs[i].expr, expr)) return unify(ctx, ctx->pairs[i].type, type);*/
-  /*}*/
-
-  /*Pair pair; pair.expr = expr; pair.type = type;*/
-  /*VEC_PUSH(ctx->pairs, pair); */
-  /*return 1;*/
-/*}*/
-
-/*Type* new_type (Context* ctx) {*/
-  /*Type* type = malloc(sizeof(Type));*/
-  /*type->vrt = TYP_TERM;*/
-  /*type->det = 0;  */
-  /*format_to("t%d", type->term, BUF_LEN, ctx->index);*/
-  /*ctx->index++;*/
-  /*return type;*/
-/*}*/
-
-/*Type* arrow (Type* lhs, Type* rhs) {*/
-  /*Type* type = malloc(sizeof(Type));*/
-  /*type->vrt = TYP_COMP;*/
-  /*type->comp.lhs = lhs;*/
-  /*type->comp.rhs = rhs;*/
-  /*return type;*/
-/*}*/
-
-/*Type* poly (Type* lhs, Type* rhs) {*/
-  /*Type* type = malloc(sizeof(Type));*/
-  /*type->vrt = TYP_POLY;*/
-  /*type->poly.lhs = lhs;*/
-  /*type->poly.rhs = rhs;*/
-  /*return type;*/
-/*}*/
-
-/*int type_check (Context *ctx, Expr *expr) {*/
-  /*switch (expr->vrt) {*/
-    /*case EXP_TERM: {*/
-      /*if (expr->type != NULL) return push_type(ctx, expr, expr->type);*/
-      /*else return push_type(ctx, expr, new_type(ctx));*/
-    /*}*/
-    /*case EXP_ABST: {*/
-      /*Type* t1 = new_type(ctx);*/
-      /*Type* t2 = new_type(ctx);*/
-
-      /*return */
-        /*push_type(ctx, expr, arrow(t1, t2)) &&*/
-        /*push_type(ctx, expr->abst.lhs, t1)  && */
-        /*push_type(ctx, expr->abst.rhs, t2)  && */
-        /*type_check(ctx, expr->abst.lhs)     && */
-        /*type_check(ctx, expr->abst.rhs);*/
-    /*}*/
-    /*case EXP_APPL: {*/
-      /*Type* t1 = new_type(ctx);*/
-      /*Type* t2 = new_type(ctx);*/
-
-      /*return */
-        /*push_type(ctx, expr, t2)                      && */
-        /*push_type(ctx, expr->appl.lhs, arrow(t1, t2)) && */
-        /*push_type(ctx, expr->appl.rhs, t1)            && */
-        /*type_check(ctx, expr->appl.lhs)               && */
-        /*type_check(ctx, expr->appl.rhs);*/
-    /*}*/
-    /*case EXP_ABST_TYPE: {*/
-      /*Type* t1 = expr->abst_type.lhs;*/
-      /*Type* t2 = new_type(ctx);*/
-
-      /*return */
-        /*push_type(ctx, expr, poly(t1, t2))      && */
-        /*push_type(ctx, expr->abst_type.rhs, t2) &&*/
-        /*type_check(ctx, expr->abst_type.rhs);*/
-    /*}*/
-    /*case EXP_APPL_TYPE: {      */
-      /*if (!type_check(ctx, expr->appl_type.lhs)) return 0;*/
-
-      /*Type* t2 = ctx_find(ctx, expr->appl_type.lhs);*/
-      /*Type* t1 = new_type(ctx); *t1 = *t2->poly.rhs;*/
-      /*type_subst(t1, t2->poly.lhs, expr->appl_type.rhs);*/
-
-      /*return push_type(ctx, expr, t1);*/
-    /*}*/
-  /*}*/
-/*}*/
-
-// \\a x:a.x
-// \\a : forall a . t1
-// \\x : t1 = t2 -> t3
-// \\x : t2 = a
-// x : t3 = a
-//
-// \\a x:a.x : forall a . a->a
-//
-// (\\a x:a.x) [b]
-// (\\a x:a.x) [b] : t1
-// (\\a x:a.x) : t2 -> forall a . t1
-// [b]: t2 = b
-//
-// \\x : t1 = t3 -> t4
-// x : t3 = a
-// x : t4 = a
-//
-// t2 = b
-// t1 = a -> a
-//
-// t1 = (forall a . a -> a)[a:=b] = b -> b

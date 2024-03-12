@@ -13,13 +13,7 @@ typedef struct Expr Expr;
 typedef struct Sort Sort;
 typedef struct Annot Annot;
 
-typedef enum Form {
-  FORM_TERM,
-  FORM_ARROW,
-} Form;
-
 typedef struct Type {
-  Form form;
   union {
     char term[BUF_LEN];
     struct { Expr* lhs; Expr* rhs; } arrow;
@@ -27,25 +21,11 @@ typedef struct Type {
 } Type;
 
 typedef struct Kind {
-  Form form;
   union {
     EMPTY term;
     struct { Kind* lhs; Kind* rhs; } arrow;
   };
 } Kind;
-
-typedef enum Level {
-  LEV_TYPE,
-  LEV_KIND,
-} Level;
-
-typedef struct Sort {
-  Level level;
-  union {
-    Type type;
-    Kind kind;
-  };
-} Sort;
 
 typedef enum AnnotType {
   ANN_EMPTY,
@@ -56,14 +36,13 @@ typedef struct Annot {
   AnnotType typ;
   union {
     EMPTY empty;
-    Expr* type;
+    Expr* ann;
   };
 } Annot;
 
 typedef enum ExprType {
   EXP_FREE,
   EXP_TERM,
-  EXP_TYPE,
   EXP_KIND,
   EXP_APP,
   EXP_LAM,
@@ -80,12 +59,9 @@ typedef struct Expr {
   union {
     struct { char name[BUF_LEN]; int idx; } term;
     char free[BUF_LEN];
-    Kind kind;
-    Type type;
-
     struct { Expr* lhs; Expr* rhs; } app;
     struct { Expr* lhs; Expr* rhs; } lam;
-    struct { Expr* lhs; Expr* rhs; } pi;
+    struct { Expr* lhs; Expr* rhs; int dep; } pi;
   };
 } Expr;
 

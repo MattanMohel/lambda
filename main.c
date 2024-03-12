@@ -19,10 +19,17 @@ Expr test (const char* tex) {
   print_expr(&expr);
   printf("\n");
 
+  Expr* type = check(&expr);
+
+  if (type != NULL) {
+    print_expr(type);
+    printf("\n");
+  }
+
   return expr;
 }
 
-// !a.Lx:a->a y:a.x y : forall a . (a -> a) -> a -> a
+
 
 int main (int argc, char** argv) {
   //Expr r1 = term("\\x.x y z");
@@ -31,17 +38,17 @@ int main (int argc, char** argv) {
   //printf("eq: %b\n", expr_eq(&r1, &r2));
   //check();
   
-  if (argc != 3) {
+  if (argc != 2) {
     printf("expected an argument!\n");
     return 1;
   }
 
   Expr a = test(argv[1]);
-  Expr b = test(argv[2]);
+  //Expr b = test(argv[2]);
 
-  int pass = expr_eq(&a, &b);
+  //int pass = expr_eq(&a, &b);
 
-  printf("eq: %d\n", pass);
+  //printf("eq: %d\n", pass);
 
   return 0;
 }

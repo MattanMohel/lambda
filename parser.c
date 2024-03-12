@@ -6,6 +6,7 @@
 typedef struct Parser {
   VEC(Token) stream;
   int binding;
+  int dummies;
   Hashmap* binds;
   Token* ptr; 
   char mes [BUF_LEN];
@@ -111,7 +112,6 @@ int is_expr_sort (ExprType typ) {
     typ == EXP_TERM || 
     typ == EXP_FREE || 
     typ == EXP_KIND ||
-    typ == EXP_TYPE || 
     typ == EXP_PI;
 }
 
@@ -133,6 +133,10 @@ void push_bind (Parser* parser, Expr* expr) {
   int* index = malloc(sizeof(int));
   *index = parser->binds->len;
   hmap_add(parser->binds, expr_ident(expr), index);
+
+  // transform free variable to a binding one
+  expr->typ = EXP_TERM;
+  expr->term.idx = parser->binds->len - 1;
 }
 
 void rem_bind (Parser* parser, Expr* expr) {
@@ -141,12 +145,12 @@ void rem_bind (Parser* parser, Expr* expr) {
 
 Assoc expr_assoc (TokenType type) {
   switch (type) {
-    case TOK_APP:  return new_assoc(LASSOC, 50);
+    case TOK_APP:    return new_assoc(LASSOC, 50);
     case TOK_ARROW:  return new_assoc(RASSOC, 70);
-    case TOK_LAM: return new_assoc(LASSOC, 30);
+    case TOK_LAM:    return new_assoc(LASSOC, 30);
     case TOK_COLON:  return new_assoc(LASSOC, 60);
     case TOK_FORALL: return new_assoc(LASSOC, 30);
-    default: return new_assoc(RASSOC, -1);
+    default:         return new_assoc(RASSOC, -1);
   }
 }
 
@@ -156,6 +160,7 @@ int parse (VEC(Token) tokens, Expr* res) {
   parser.stream = tokens;
   parser.ptr = tokens;
   parser.binding = 0;
+  parser.dummies = 0;
   parser.binds = hmap_new();
 
   int pass = parse_expr(&parser, new_assoc(RASSOC, 0), res);
@@ -191,7 +196,6 @@ int parse_expr (Parser* parser, Assoc assoc, Expr* res) {
     }
     case TOK_ASTERISK: {
       Token* cur = eat(parser);
-      lhs.kind.form = FORM_TERM;
       lhs.typ = EXP_KIND;
       lhs.col = cur->col;
       lhs.row = cur->row;
@@ -287,16 +291,24 @@ int parse_app (Parser* parser, Assoc assoc, Expr* lhs, Expr* res) {
 
 int parse_arrow (Parser* parser, Assoc assoc, Expr* lhs, Expr* res) {  
   if (!is_expr_sort(lhs->typ)) return push_err(parser, "cannot form arrow of non-sort lhs term");  
-  Expr rhs = new_expr(); 
+  Expr rhs = new_expr();   
+  
+  Expr expr = new_expr();
+  parser->dummies++;
+
   if (!parse_expr(parser, assoc, &rhs)) return 0;
   if (!is_expr_sort(rhs.typ)) return push_err(parser, "cannot from arrow of non-sort rhs term");
 
-  // NOTE: they can still be of different sorts!
+  expr.typ = EXP_FREE;
+  expr.annot.typ = ANN_TYPED;
+  format_to("$%d", expr.free, BUF_LEN, parser->dummies-1);
+  expr.annot.ann = lhs;
+  parser->dummies--;
 
-  res->typ = EXP_TYPE;
-  res->type.form = FORM_ARROW; 
-  res->type.arrow.lhs = lhs;
-  res->type.arrow.rhs = expr_alloc(&rhs);
+  res->typ = EXP_PI;
+  res->pi.lhs = expr_alloc(&expr);
+  res->pi.rhs = expr_alloc(&rhs);
+  res->pi.dep = 0;
   return 1;
 }
 
@@ -308,7 +320,7 @@ int parse_annot (Parser* parser, Assoc assoc, Expr* lhs) {
   if (!is_expr_sort(rhs.typ)) return push_err(parser, "expected sort on rhs on annotation");
   
   lhs->annot.typ = ANN_TYPED;
-  lhs->annot.type = expr_alloc(&rhs);
+  lhs->annot.ann = expr_alloc(&rhs);
  
   return 1;
 }
@@ -357,39 +369,10 @@ int parse_pi (Parser* parser, Assoc assoc, Expr* res) {
   rem_bind(parser, &bind);
   
   res->typ = EXP_PI;
-  res->lam.lhs = expr_alloc(&bind);
-  res->lam.rhs = expr_alloc(&body);
+  res->pi.lhs = expr_alloc(&bind);
+  res->pi.rhs = expr_alloc(&body);
+  res->pi.dep = 1;
   return 1;
-}
-
-void print_type (Type* type) {
-  switch (type->form) {
-    case FORM_TERM:
-      printf("%s", type->term);
-      break;
-    case FORM_ARROW:
-      printf("(");
-      print_expr(type->arrow.lhs);
-      printf("->");
-      print_expr(type->arrow.rhs);
-      printf(")");
-      break;
-  }
-}
-
-void print_kind (Kind* kind) {
-  switch (kind->form) {
-    case FORM_TERM:
-      printf("*");
-      break;
-    case FORM_ARROW:
-      printf("(");
-      print_kind(kind->arrow.lhs);
-      printf("->");
-      print_kind(kind->arrow.rhs);
-      printf(")");
-      break;
-  }
 }
 
 void print_expr (Expr* expr) {
@@ -409,19 +392,25 @@ void print_expr (Expr* expr) {
       printf(")");
       break;
     case EXP_PI:
-      printf("(∀");
-      print_expr(expr->pi.lhs);
-      printf(". ");
-      print_expr(expr->pi.rhs);
-      printf(")");
-      break;
-    case EXP_TYPE:
-      print_type(&expr->type);
+      if (expr->pi.dep) {
+        printf("(∀");
+        print_expr(expr->pi.lhs);
+        printf(". ");
+        print_expr(expr->pi.rhs);
+        printf(")");
+      } else {
+        printf("(");
+        print_expr(expr->pi.lhs->annot.ann);
+        printf("->");
+        print_expr(expr->pi.rhs);
+        printf(")");
+      }
       break;
     case EXP_KIND:
-      print_kind(&expr->kind);
+      printf("*");
       break;
     case EXP_TERM: 
+      //printf("%s", expr->term.name);
       printf("#%d", expr->term.idx);
       break;
     case EXP_FREE:
@@ -430,7 +419,6 @@ void print_expr (Expr* expr) {
   }  
   if (expr->annot.typ == ANN_TYPED) {
     printf(": ");
-    print_expr(expr->annot.type);
+    print_expr(expr->annot.ann);
   }
 }
-
